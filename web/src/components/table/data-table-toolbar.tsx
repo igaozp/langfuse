@@ -1,10 +1,5 @@
 import { Button } from "@/src/components/ui/button";
-import React, {
-  type Dispatch,
-  type SetStateAction,
-  useEffect,
-  useState,
-} from "react";
+import React, { type Dispatch, type SetStateAction, useState } from "react";
 import { Input } from "@/src/components/ui/input";
 import { DataTableColumnVisibilityFilter } from "@/src/components/table/data-table-column-visibility-filter";
 import { PopoverFilterBuilder } from "@/src/features/filters/components/filter-builder";
@@ -14,6 +9,7 @@ import {
   type OrderByState,
   type TableViewPresetDomain,
   type TableViewPresetTableName,
+  type TracingSearchType,
 } from "@langfuse/shared";
 import {
   type RowSelectionState,
@@ -25,7 +21,7 @@ import {
   DataTableRowHeightSwitch,
   type RowHeight,
 } from "@/src/components/table/data-table-row-height-switch";
-import { Search } from "lucide-react";
+import { Search, ChevronDown } from "lucide-react";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
 import { TableDateRangeDropdown } from "@/src/components/date-range-dropdowns";
 import {
@@ -35,7 +31,15 @@ import {
 import { DataTableSelectAllBanner } from "@/src/components/table/data-table-multi-select-actions/data-table-select-all-banner";
 import { MultiSelect } from "@/src/features/filters/components/multi-select";
 import { cn } from "@/src/utils/tailwind";
+import DocPopup from "@/src/components/layouts/doc-popup";
 import { TableViewPresetsDrawer } from "@/src/components/table/table-view-presets/components/data-table-view-presets-drawer";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/src/components/ui/dropdown-menu";
 
 export interface MultiSelect {
   selectAll: boolean;
@@ -48,9 +52,12 @@ export interface MultiSelect {
 }
 
 interface SearchConfig {
-  placeholder: string;
-  updateQuery(event: string): void;
+  metadataSearchFields: string[];
+  updateQuery: (event: string) => void;
   currentQuery?: string;
+  tableAllowsFullTextSearch?: boolean;
+  setSearchType: ((newSearchType: TracingSearchType[]) => void) | undefined;
+  searchType: TracingSearchType[] | undefined;
 }
 
 interface TableViewControllers {
@@ -122,45 +129,131 @@ export function DataTableToolbar<TData, TValue>({
   const [searchString, setSearchString] = useState(
     searchConfig?.currentQuery ?? "",
   );
-  const capture = usePostHogClientCapture();
 
-  // Update searchString when searchConfig.currentQuery changes to account for saved view selection
-  // Only update once on initial value of searchConfig.currentQuery, to allow for initial value to be set
-  useEffect(() => {
-    if (searchConfig?.currentQuery !== searchString) {
-      setSearchString(searchConfig?.currentQuery ?? "");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchConfig?.currentQuery]);
+  const capture = usePostHogClientCapture();
 
   return (
     <div className={cn("grid h-fit w-full gap-0 px-2", className)}>
       <div className="my-2 flex flex-wrap items-center gap-2 @container">
         {searchConfig && (
-          <div className="flex max-w-md items-center rounded-md border">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                capture("table:search_submit");
-                searchConfig.updateQuery(searchString);
-              }}
+          <div className="flex w-full max-w-sm items-stretch">
+            <div
+              className={cn(
+                "flex h-8 flex-1 items-center border border-input bg-background pl-2",
+                searchConfig.setSearchType
+                  ? "rounded-l-md rounded-r-none border-r-0"
+                  : "rounded-l-md rounded-r-md",
+              )}
             >
-              <Search className="h-4 w-4" />
-            </Button>
-            <Input
-              autoFocus
-              placeholder={searchConfig.placeholder}
-              value={searchString}
-              onChange={(event) => setSearchString(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
+              <Button
+                variant="ghost"
+                size="icon"
+                className="mr-1"
+                onClick={() => {
                   capture("table:search_submit");
                   searchConfig.updateQuery(searchString);
+                }}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+              <Input
+                autoFocus
+                placeholder={
+                  searchConfig.tableAllowsFullTextSearch
+                    ? "Search..."
+                    : `Search (${searchConfig.metadataSearchFields.join(", ")})`
                 }
-              }}
-              className="min-w-0 max-w-fit border-none px-0"
-            />
+                value={searchString}
+                onChange={(event) => setSearchString(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    capture("table:search_submit");
+                    searchConfig.updateQuery(searchString);
+                  }
+                }}
+                className="w-full border-none bg-transparent px-0 py-2 text-sm focus-visible:outline-none focus-visible:ring-0"
+              />
+            </div>
+            {searchConfig.setSearchType && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="default"
+                    className="flex w-auto min-w-[130px] items-center justify-between gap-1 rounded-l-none border-l-0"
+                  >
+                    <span className="flex items-center gap-1">
+                      {searchConfig.tableAllowsFullTextSearch &&
+                      (searchConfig.searchType ?? []).includes("content")
+                        ? "Metadata + Full Text"
+                        : "Metadata"}
+                      <DocPopup
+                        description={
+                          <>
+                            <p className="text-xs font-normal text-primary">
+                              <strong>Metadata search:</strong>{" "}
+                              {searchConfig.metadataSearchFields.join(", ")}
+                            </p>
+                            {searchConfig.tableAllowsFullTextSearch ? (
+                              <>
+                                <p className="text-xs font-normal text-primary">
+                                  <strong>Full text search:</strong> Input,
+                                  Output
+                                </p>
+                                <br />
+                                <p className="text-xs font-normal text-primary">
+                                  For improved performance, filter the table
+                                  before searching.
+                                </p>
+                              </>
+                            ) : (
+                              <p className="mt-2 text-xs font-normal text-primary">
+                                Full text search (Input, Output) is not
+                                available for this table.
+                              </p>
+                            )}
+                          </>
+                        }
+                      />
+                    </span>
+                    <ChevronDown className="h-4 w-4 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuRadioGroup
+                    value={
+                      searchConfig.tableAllowsFullTextSearch &&
+                      (searchConfig.searchType ?? []).includes("content")
+                        ? "metadata_fulltext"
+                        : "metadata"
+                    }
+                    onValueChange={(value) => {
+                      if (
+                        !searchConfig.tableAllowsFullTextSearch &&
+                        value === "metadata_fulltext"
+                      )
+                        return;
+
+                      const newSearchType =
+                        value === "metadata_fulltext"
+                          ? ["id" as const, "content" as const]
+                          : ["id" as const];
+                      searchConfig.setSearchType?.(newSearchType);
+                    }}
+                  >
+                    <DropdownMenuRadioItem value="metadata">
+                      Metadata
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem
+                      value="metadata_fulltext"
+                      disabled={!searchConfig.tableAllowsFullTextSearch}
+                    >
+                      Metadata + Full Text
+                    </DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         )}
         {selectedOption && setDateRangeAndOption && (

@@ -570,7 +570,7 @@ export const deleteTraces = async (projectId: string, traceIds: string[]) => {
       traceIds,
     },
     clickhouseConfigs: {
-      request_timeout: 120_000, // 2 minutes
+      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "tracing",
@@ -597,7 +597,7 @@ export const deleteTracesOlderThanDays = async (
       cutoffDate: convertDateToClickhouseDateTime(beforeDate),
     },
     clickhouseConfigs: {
-      request_timeout: 120_000, // 2 minutes
+      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "tracing",
@@ -619,7 +619,7 @@ export const deleteTracesByProjectId = async (projectId: string) => {
       projectId,
     },
     clickhouseConfigs: {
-      request_timeout: 120_000, // 2 minutes
+      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "tracing",
@@ -1036,3 +1036,37 @@ export const traceWithSessionIdExists = async (
 
   return result.length > 0;
 };
+
+export async function getAgentGraphData(params: {
+  projectId: string;
+  traceId: string;
+  chMinStartTime: string;
+  chMaxStartTime: string;
+}) {
+  const { projectId, traceId, chMinStartTime, chMaxStartTime } = params;
+
+  const query = `
+          SELECT
+            id,
+            parent_observation_id,
+            metadata['langgraph_node'] AS node,
+            metadata['langgraph_step'] AS step
+          FROM
+            observations
+          WHERE
+            project_id = {projectId: String}
+            AND trace_id = {traceId: String}
+            AND start_time >= {chMinStartTime: DateTime64(3)}
+            AND start_time <= {chMaxStartTime: DateTime64(3)}
+        `;
+
+  return queryClickhouse({
+    query,
+    params: {
+      traceId,
+      projectId,
+      chMinStartTime,
+      chMaxStartTime,
+    },
+  });
+}
