@@ -30,6 +30,7 @@ import { env } from "../../env";
 import { _handleGetScoreById, _handleGetScoresByIds } from "./scores-utils";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
 import { ClickHouseClientConfigOptions } from "@clickhouse/client";
+import { recordDistribution } from "../instrumentation";
 
 export const searchExistingAnnotationScore = async (
   projectId: string,
@@ -348,6 +349,14 @@ export const getScoresForTraces = async <
       metadata: excludeMetadata ? {} : row.metadata,
     });
 
+    recordDistribution(
+      "langfuse.query_by_id_age",
+      new Date().getTime() - score.timestamp.getTime(),
+      {
+        table: "scores",
+      },
+    );
+
     if (includeHasMetadata) {
       Object.assign(score, { hasMetadata: !!row.has_metadata });
     }
@@ -439,6 +448,59 @@ export const getScoresForObservations = async <
     hasMetadata: (includeHasMetadata
       ? !!row.has_metadata
       : undefined) as IncludeHasMetadata extends true ? boolean : never,
+  }));
+};
+
+export const getRunScoresGroupedByNameSourceType = async (
+  projectId: string,
+  datasetRunIds: string[],
+  timestamp: Date | undefined,
+) => {
+  if (datasetRunIds.length === 0) {
+    return [];
+  }
+
+  // We mainly use queries like this to retrieve filter options.
+  // Therefore, we can skip final as some inaccuracy in count is acceptable.
+  const query = `
+    select 
+      name,
+      source,
+      data_type
+    from scores s
+    WHERE s.project_id = {projectId: String}
+    ${timestamp ? `AND s.timestamp >= {timestamp: DateTime64(3)}` : ""}
+    AND s.dataset_run_id IN ({datasetRunIds: Array(String)})
+    GROUP BY name, source, data_type
+    ORDER BY count() desc
+    LIMIT 1000;
+  `;
+
+  const rows = await queryClickhouse<{
+    name: string;
+    source: string;
+    data_type: string;
+  }>({
+    query: query,
+    params: {
+      projectId: projectId,
+      ...(timestamp
+        ? { timestamp: convertDateToClickhouseDateTime(timestamp) }
+        : {}),
+      datasetRunIds: datasetRunIds,
+    },
+    tags: {
+      feature: "tracing",
+      type: "score",
+      kind: "list",
+      projectId,
+    },
+  });
+
+  return rows.map((row) => ({
+    name: row.name,
+    source: row.source as ScoreSourceType,
+    dataType: row.data_type as ScoreDataType,
   }));
 };
 
@@ -869,6 +931,9 @@ export const deleteScores = async (projectId: string, scoreIds: string[]) => {
       projectId,
       scoreIds,
     },
+    clickhouseConfigs: {
+      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
+    },
     tags: {
       feature: "tracing",
       type: "score",
@@ -916,7 +981,7 @@ export const deleteScoresByProjectId = async (projectId: string) => {
       projectId,
     },
     clickhouseConfigs: {
-      request_timeout: 120_000, // 2 minutes
+      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "tracing",
@@ -943,7 +1008,7 @@ export const deleteScoresOlderThanDays = async (
       cutoffDate: convertDateToClickhouseDateTime(beforeDate),
     },
     clickhouseConfigs: {
-      request_timeout: 120_000, // 2 minutes
+      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "tracing",

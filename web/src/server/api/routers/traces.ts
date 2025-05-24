@@ -18,6 +18,7 @@ import {
   timeFilter,
   tracesTableUiColumnDefinitions,
   type Observation,
+  TracingSearchType,
 } from "@langfuse/shared";
 import {
   traceException,
@@ -37,15 +38,22 @@ import {
   TraceDeleteQueue,
   getTracesTableMetrics,
   getCategoricalScoresGroupedByName,
+  convertDateToClickhouseDateTime,
+  getAgentGraphData,
 } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "crypto";
 import { createBatchActionJob } from "@/src/features/table/server/createBatchActionJob";
 import { throwIfNoEntitlement } from "@/src/features/entitlements/server/hasEntitlement";
+import {
+  type AgentGraphDataResponse,
+  AgentGraphDataSchema,
+} from "@/src/features/trace-graph-view/types";
 
 const TraceFilterOptions = z.object({
   projectId: z.string(), // Required for protectedProjectProcedure
   searchQuery: z.string().nullable(),
+  searchType: z.array(TracingSearchType),
   filter: z.array(singleFilter).nullable(),
   orderBy: orderBy,
   ...paginationZod,
@@ -82,6 +90,7 @@ export const traceRouter = createTRPCRouter({
         projectId: ctx.session.projectId,
         filter: input.filter ?? [],
         searchQuery: input.searchQuery ?? undefined,
+        searchType: input.searchType ?? ["id"],
         orderBy: input.orderBy,
         limit: input.limit,
         page: input.page,
@@ -91,14 +100,18 @@ export const traceRouter = createTRPCRouter({
   countAll: protectedProjectProcedure
     .input(TraceFilterOptions)
     .query(async ({ input, ctx }) => {
-      const totalCount = await getTracesTableCount({
+      const count = await getTracesTableCount({
         projectId: ctx.session.projectId,
         filter: input.filter ?? [],
+        searchType: input.searchType,
         searchQuery: input.searchQuery ?? undefined,
         limit: 1,
         page: 0,
       });
-      return { totalCount };
+
+      return {
+        totalCount: count,
+      };
     }),
   metrics: protectedProjectProcedure
     .input(
@@ -212,25 +225,26 @@ export const traceRouter = createTRPCRouter({
       }),
     )
     .query(async ({ input, ctx }) => {
-      const [observations, scores] = await Promise.all([
-        getObservationsForTrace(
-          input.traceId,
-          input.projectId,
-          input.timestamp ?? input.fromTimestamp ?? undefined,
-        ),
-        getScoresForTraces({
-          projectId: input.projectId,
-          traceIds: [input.traceId],
-          timestamp: input.timestamp ?? input.fromTimestamp ?? undefined,
-        }),
-      ]);
-
       if (!ctx.trace) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Trace not found",
         });
       }
+
+      const [observations, scores] = await Promise.all([
+        getObservationsForTrace({
+          traceId: input.traceId,
+          projectId: input.projectId,
+          timestamp: input.timestamp ?? input.fromTimestamp ?? undefined,
+          includeIO: false,
+        }),
+        getScoresForTraces({
+          projectId: input.projectId,
+          traceIds: [input.traceId],
+          timestamp: input.timestamp ?? input.fromTimestamp ?? undefined,
+        }),
+      ]);
 
       const validatedScores = filterAndValidateDbScoreList({
         scores,
@@ -474,5 +488,51 @@ export const traceRouter = createTRPCRouter({
           code: "INTERNAL_SERVER_ERROR",
         });
       }
+    }),
+
+  getAgentGraphData: protectedProjectProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        traceId: z.string(),
+        minStartTime: z.string(),
+        maxStartTime: z.string(),
+      }),
+    )
+    .query(async ({ input }): Promise<Required<AgentGraphDataResponse>[]> => {
+      const { traceId, projectId, minStartTime, maxStartTime } = input;
+
+      const chMinStartTime = convertDateToClickhouseDateTime(
+        new Date(minStartTime),
+      );
+      const chMaxStartTime = convertDateToClickhouseDateTime(
+        new Date(maxStartTime),
+      );
+
+      const records = await getAgentGraphData({
+        projectId,
+        traceId,
+        chMinStartTime,
+        chMaxStartTime,
+      });
+
+      const result = records
+        .map((r) => {
+          const parsed = AgentGraphDataSchema.safeParse(r);
+
+          return parsed.success &&
+            parsed.data.step != null &&
+            parsed.data.node != null
+            ? {
+                id: parsed.data.id,
+                node: parsed.data.node,
+                step: parsed.data.step,
+                parentObservationId: parsed.data.parent_observation_id,
+              }
+            : null;
+        })
+        .filter((r) => Boolean(r)) as Required<AgentGraphDataResponse>[];
+
+      return result;
     }),
 });

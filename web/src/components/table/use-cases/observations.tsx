@@ -3,13 +3,7 @@ import { DataTable } from "@/src/components/table/data-table";
 import { DataTableToolbar } from "@/src/components/table/data-table-toolbar";
 import { useEffect, useMemo } from "react";
 import { TokenUsageBadge } from "@/src/components/token-usage-badge";
-import {
-  NumberParam,
-  StringParam,
-  useQueryParam,
-  useQueryParams,
-  withDefault,
-} from "use-query-params";
+import { NumberParam, useQueryParams, withDefault } from "use-query-params";
 import { useQueryFilterState } from "@/src/features/filters/hooks/useFilterState";
 import { formatIntervalSeconds } from "@/src/utils/dates";
 import useColumnVisibility from "@/src/features/column-visibility/hooks/useColumnVisibility";
@@ -50,7 +44,7 @@ import {
 } from "@/src/hooks/use-environment-filter";
 import { Badge } from "@/src/components/ui/badge";
 import { type Row } from "@tanstack/react-table";
-import TableId from "@/src/components/table/table-id";
+import TableIdOrName from "@/src/components/table/table-id";
 import { ItemBadge } from "@/src/components/ItemBadge";
 import { Skeleton } from "@/src/components/ui/skeleton";
 import { PeekViewObservationDetail } from "@/src/components/table/peek/peek-observation-detail";
@@ -59,6 +53,7 @@ import { useDetailPageLists } from "@/src/features/navigate-detail-pages/context
 import { useObservationPeekNavigation } from "@/src/components/table/peek/hooks/useObservationPeekNavigation";
 import { useTableViewManager } from "@/src/components/table/table-view-presets/hooks/useTableViewManager";
 import { useRouter } from "next/router";
+import { useFullTextSearch } from "@/src/components/table/use-cases/useFullTextSearch";
 
 export type ObservationsTableRow = {
   // Shown by default
@@ -120,11 +115,10 @@ export default function ObservationsTable({
   const router = useRouter();
   const { viewId } = router.query;
 
-  const [searchQuery, setSearchQuery] = useQueryParam(
-    "search",
-    withDefault(StringParam, null),
-  );
   const { setDetailPageList } = useDetailPageLists();
+
+  const { searchQuery, searchType, setSearchQuery, setSearchType } =
+    useFullTextSearch();
 
   const [paginationState, setPaginationState] = useQueryParams({
     pageIndex: withDefault(NumberParam, 0),
@@ -239,6 +233,7 @@ export default function ObservationsTable({
     projectId,
     filter: filterState,
     searchQuery,
+    searchType,
     page: 0,
     limit: 0,
     orderBy: null,
@@ -340,6 +335,14 @@ export default function ObservationsTable({
       header: "Name",
       size: 150,
       enableSorting: true,
+      cell: ({ row }) => {
+        const value: ObservationsTableRow["name"] = row.getValue("name");
+        return value ? (
+          <span className="truncate" title={value}>
+            {value}
+          </span>
+        ) : undefined;
+      },
     },
     {
       accessorKey: "input",
@@ -517,7 +520,7 @@ export default function ObservationsTable({
         if (!model) return null;
 
         return modelId ? (
-          <TableId value={model} />
+          <TableIdOrName value={model} />
         ) : (
           <UpsertModelFormDrawer
             action="create"
@@ -562,7 +565,7 @@ export default function ObservationsTable({
         const promptName = row.original.promptName;
         const promptVersion = row.original.promptVersion;
         const value = `${promptName} (v${promptVersion})`;
-        return promptName && promptVersion && <TableId value={value} />;
+        return promptName && promptVersion && <TableIdOrName value={value} />;
       },
     },
     {
@@ -657,7 +660,7 @@ export default function ObservationsTable({
         const traceId = row.getValue("traceId");
         return typeof observationId === "string" &&
           typeof traceId === "string" ? (
-          <TableId value={observationId} />
+          <TableIdOrName value={observationId} />
         ) : null;
       },
     },
@@ -678,7 +681,7 @@ export default function ObservationsTable({
       cell: ({ row }) => {
         const value = row.getValue("traceId");
         return typeof value === "string" ? (
-          <TableId value={value} />
+          <TableIdOrName value={value} />
         ) : undefined;
       },
       enableSorting: true,
@@ -929,9 +932,12 @@ export default function ObservationsTable({
         filterState={inputFilterState}
         setFilterState={useDebounce(setInputFilterState)}
         searchConfig={{
-          placeholder: "Search (by id, name, trace name, model)",
+          metadataSearchFields: ["ID", "Name", "Trace Name", "Model"],
           updateQuery: setSearchQuery,
           currentQuery: searchQuery ?? undefined,
+          searchType,
+          setSearchType,
+          tableAllowsFullTextSearch: true,
         }}
         viewConfig={{
           tableName: TableViewPresetTableName.Observations,
@@ -964,7 +970,7 @@ export default function ObservationsTable({
       <DataTable
         columns={columns}
         peekView={{
-          itemType: "TRACE",
+          itemType: "RUNNING_EVALUATOR",
           customTitlePrefix: "Observation ID:",
           listKey: "observations",
           urlPathname,
